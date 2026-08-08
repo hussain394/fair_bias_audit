@@ -9,6 +9,7 @@ from sklearn.metrics import accuracy_score, f1_score
 from sklearn.compose import ColumnTransformer
 from sklearn.preprocessing import OneHotEncoder
 from sklearn.pipeline import Pipeline
+from xgboost import XGBClassifier
 
 from fairlearn.metrics import (
     MetricFrame, demographic_parity_difference, equalized_odds_difference,
@@ -35,6 +36,12 @@ if uploaded is not None:
     )
     target_values = df[target_col].dropna().unique().tolist()
     positive_class = st.sidebar.selectbox("Positive outcome", target_values)
+
+    model_choice = st.sidebar.selectbox(
+        "Baseline model",
+        ["Logistic Regression", "XGBoost"],
+        help="Logistic Regression is faster and more interpretable. XGBoost usually scores higher accuracy but can be less stable on very small or messy uploaded datasets.",
+    )
     run_mitigation = st.sidebar.checkbox("Run Bias Mitigation", value=False)
 
     if st.sidebar.button("Run Audit"):
@@ -65,9 +72,17 @@ if uploaded is not None:
                 remainder="drop",
             )
 
+            # XGBoost needs the target as plain ints and handles NaNs natively;
+            # LogisticRegression needs fully numeric, non-null input from the
+            # ColumnTransformer above — both are satisfied by this pipeline.
+            classifier = (
+                LogisticRegression(max_iter=1000)
+                if model_choice == "Logistic Regression"
+                else XGBClassifier(eval_metric="logloss", random_state=42)
+            )
             model = Pipeline(steps=[
                 ("preprocessor", preprocessor),
-                ("classifier", LogisticRegression(max_iter=1000)),
+                ("classifier", classifier),
             ])
 
             # FIX 3: reset_index avoids any subtle index-alignment issues
@@ -127,6 +142,7 @@ if uploaded is not None:
 
             if run_mitigation:
                 st.subheader("Bias Mitigation (Exponentiated Gradient)")
+                st.caption("Mitigation uses Logistic Regression as its base estimator — Fairlearn's reductions API requires an estimator with `sample_weight` support, which XGBoost's sklearn wrapper doesn't reliably provide across versions.")
                 with st.spinner("Training fairness-constrained model..."):
                     # FIX 2: transform ONCE using the already-fitted
                     # preprocessor from the pipeline — no redundant re-fit.
